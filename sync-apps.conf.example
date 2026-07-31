@@ -1,0 +1,11 @@
+# Inngest client id | serve URL
+#
+# app_id = the `id` in `new Inngest({ id: "..." })` in your worker app.
+# url    = public HTTPS serve endpoint (Inngest server polls this).
+#
+# Mastra apps: path is usually /inngest (NOT /api/inngest).
+# Next.js / Express: often /api/inngest — match your framework.
+#
+# Examples:
+#   my-api|https://api.example.com/api/inngest
+#   my-mastra|https://workers.example.com/inngest

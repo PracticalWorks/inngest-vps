@@ -1,0 +1,20 @@
+# Copy to rotate.conf (gitignored) and fill in. Used by scripts/rotate-inngest-keys.sh.
+# NONE of these values are echoed by the script.
+# NOTE: this file is sourced by bash — keep every value QUOTED and avoid < > characters.
+
+# Coolify API base + token (token needs read + write + deploy scope).
+# Only needed if your worker apps deploy via Coolify.
+# Create a token at https://<your-coolify-host>/security/api-tokens
+COOLIFY_API="https://coolify.example.com"
+COOLIFY_TOKEN=""
+
+# Inngest server VPS (ssh target) + the dir holding its docker-compose.yml/.env.
+# Put the real IP here (from scripts/../.setup.local -> INNGEST_LIGHTSAIL_IP).
+VPS_HOST="ubuntu@REPLACE_WITH_IP"
+VPS_INNGEST_DIR="/opt/inngest"
+
+# Public /inngest endpoint of every worker that shares these keys, one per line.
+WORKERS="
+https://my-api.example.com/api/inngest
+https://my-mastra-app.example.com/inngest
+"

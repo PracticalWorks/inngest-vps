@@ -1,0 +1,19 @@
+# TLS options (pick ONE — see README):
+#
+# A) Grey-cloud DNS (recommended for simplest setup): Caddy gets Let's Encrypt automatically.
+#    Set INNGEST_DOMAIN in .env and use the block below as-is.
+#
+# B) Orange-cloud + Full (strict): comment out the auto-TLS block and use the certs block
+#    at the bottom (mount ./certs from Cloudflare Origin CA).
+
+{$INNGEST_DOMAIN:inngest.example.com} {
+	encode gzip
+	reverse_proxy inngest:8288
+}
+
+# --- Option B: Cloudflare origin cert (uncomment + mount ./certs) ---
+# inngest.example.com {
+# 	tls /certs/origin.pem /certs/origin-key.pem
+# 	encode gzip
+# 	reverse_proxy inngest:8288
+# }

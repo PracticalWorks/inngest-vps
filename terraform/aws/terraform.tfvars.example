@@ -1,0 +1,7 @@
+aws_region          = "us-east-1"
+availability_zone   = "us-east-1a"
+instance_name       = "inngest"
+bundle_id           = "small_2_0"
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+admin_cidr          = ["YOUR.PUBLIC.IP/32"]
+inngest_domain      = "inngest.example.com"

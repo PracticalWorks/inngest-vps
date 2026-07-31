@@ -1,0 +1,12 @@
+.env
+.setup.local
+sync-apps.conf
+inngest.yaml
+terraform/aws/.terraform/
+terraform/aws/terraform.tfstate
+terraform/aws/terraform.tfstate.*
+terraform/aws/terraform.tfvars
+certs/
+backups/
+rotate.conf
+.env.bak.*

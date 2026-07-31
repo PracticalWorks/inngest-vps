@@ -1,0 +1,119 @@
+# Inngest self-hosted stack — single 2GB VPS
+# Total memory limits ≈ 1.75GB (headroom for kernel + Docker on a 2GB box)
+#
+# Deploy: ./scripts/up.sh
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      INNGEST_DOMAIN: ${INNGEST_DOMAIN:-inngest.example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      # Optional: mount Cloudflare origin cert for Full (strict) behind orange cloud
+      # - ./certs:/certs:ro
+    depends_on:
+      inngest:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  inngest:
+    image: inngest/inngest:v1.27.0
+    restart: unless-stopped
+    command: inngest start --config /etc/inngest/inngest.yaml
+    volumes:
+      - ./inngest.yaml:/etc/inngest/inngest.yaml:ro
+    environment:
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+      INNGEST_POSTGRES_URI: postgres://inngest:${PG_PASSWORD}@postgres:5432/inngest
+      INNGEST_REDIS_URI: redis://redis:6379
+      INNGEST_QUEUE_WORKERS: ${INNGEST_QUEUE_WORKERS:-200}
+      INNGEST_POLL_INTERVAL: ${INNGEST_POLL_INTERVAL:-60}
+      INNGEST_LOG_LEVEL: ${INNGEST_LOG_LEVEL:-info}
+      INNGEST_JSON: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "inngest", "alpha", "doctor", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: inngest
+      POSTGRES_USER: inngest
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inngest -d inngest"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:

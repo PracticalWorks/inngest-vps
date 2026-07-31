@@ -1,0 +1,16 @@
+#!/bin/bash
+# Lightsail launch script — runs once on first boot.
+set -eu
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -y
+apt-get install -y curl ca-certificates rsync
+
+curl -fsSL https://get.docker.com | sh
+usermod -aG docker ubuntu || true
+
+mkdir -p /opt/inngest/backups
+chown -R ubuntu:ubuntu /opt/inngest
+
+touch /var/log/inngest-launch-script.done
