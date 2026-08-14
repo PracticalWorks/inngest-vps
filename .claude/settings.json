@@ -1,0 +1,29 @@
+{
+  "$comment": [
+    "Agent controls, committed to the repo so they apply to everyone who opens it —",
+    "not to one person's machine. Copy this to .claude/settings.json and copy the",
+    "templates/hooks/ directory to .claude/hooks/, then commit both.",
+    "",
+    "WHY COMMIT IT. A guard that lives in one contributor's local settings protects",
+    "one contributor. Everyone else gets nothing, and nobody can tell the difference",
+    "by looking at the repo. In the repo, the control is reviewable, versioned, and",
+    "the same for every seat.",
+    "",
+    "SCOPE. This reaches interactive agent seats only. An automated runtime that does",
+    "not read these settings needs its own boundary — the two do not substitute for",
+    "each other, and assuming they do leaves the gap exactly where it is hardest to see."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/block-secret-print.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
