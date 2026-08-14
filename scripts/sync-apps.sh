@@ -15,6 +15,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/common.sh"
+load_local_env
 
 CONF="$(inngest_repo_root)/sync-apps.conf"
 YAML="$(inngest_repo_root)/inngest.yaml"
@@ -78,21 +79,32 @@ probe_url() {
 }
 
 reload_inngest_server() {
-  local ip host root
+  local ip host root fly_app
   root="$(inngest_repo_root)"
 
-  ip="$(get_ip)" || {
-    echo "No VPS IP — run ./scripts/up.sh first"
-    exit 1
-  }
-  host="ubuntu@${ip}"
-
   write_inngest_yaml
-  echo "→ rsync config to ${host}:${REMOTE_DIR}/"
-  rsync -avz "$YAML" "${root}/docker-compose.yml" "${host}:${REMOTE_DIR}/"
 
-  echo "→ recreate Inngest container (applies inngest.yaml mount)"
-  ssh "${SSH_OPTS[@]}" "$host" "cd ${REMOTE_DIR} && if docker info >/dev/null 2>&1; then docker compose up -d inngest; else sudo docker compose up -d inngest; fi"
+  # Fly deploys the generated poll config with the image. It never needs the
+  # Lightsail IP or SSH, and it does not use Inngest Cloud's REST sync API.
+  if [[ -n "${FLY_APP_NAME:-}" ]]; then
+    fly_app="$FLY_APP_NAME"
+    [[ -f "${root}/fly.toml" ]] || {
+      echo "Missing ${root}/fly.toml — run ./scripts/up-fly.sh first"
+      exit 1
+    }
+    echo "→ deploy generated inngest.yaml to Fly app ${fly_app}"
+    flyctl deploy --config "${root}/fly.toml" --app "$fly_app" --remote-only
+  else
+    ip="$(get_ip)" || {
+      echo "No VPS IP — run ./scripts/up.sh first"
+      exit 1
+    }
+    host="ubuntu@${ip}"
+    echo "→ rsync config to ${host}:${REMOTE_DIR}/"
+    rsync -avz "$YAML" "${root}/docker-compose.yml" "${host}:${REMOTE_DIR}/"
+    echo "→ recreate Inngest container (applies inngest.yaml mount)"
+    ssh "${SSH_OPTS[@]}" "$host" "cd ${REMOTE_DIR} && if docker info >/dev/null 2>&1; then docker compose up -d inngest; else sudo docker compose up -d inngest; fi"
+  fi
 
   echo
   echo "Server reloading. Poll interval: 60s."

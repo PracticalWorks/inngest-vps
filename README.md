@@ -1,6 +1,8 @@
 # inngest-vps
 
-**One-command self-hosted [Inngest](https://www.inngest.com/) on AWS Lightsail.**
+**One-command self-hosted [Inngest](https://www.inngest.com/) on AWS Lightsail or Fly.io.**
+
+The original Lightsail/Terraform path remains the default. The additive Fly target runs Inngest OSS on Fly, uses Fly's TLS termination and a Fly Redis service, and connects to Supabase Postgres. Neither target uses Inngest Cloud.
 
 Inngest Cloud is great, but the Hobby tier caps concurrency and crons. Self-hosting gives you full control for about **$12/month** on a 2 GB Lightsail box. Inngest ships Docker images and docs, but there is no single "deploy button" for a production-ready stack with TLS, Postgres, and Redis. This repo is that button.
 
@@ -34,7 +36,42 @@ Inngest Cloud is great, but the Hobby tier caps concurrency and crons. Self-host
 
 Your app workers can stay on Coolify, Railway, Vercel, or anywhere public HTTPS. Only the **Inngest server** runs on Lightsail; point them at it with `INNGEST_BASE_URL` + the keys from `./scripts/install.sh --print-env`.
 
-## What you get
+## Fly.io target (additive)
+
+The Fly path is a sibling to `./scripts/up.sh`; it does not replace Lightsail or Terraform:
+
+```bash
+cp fly.toml.example fly.toml
+cp .env.example .env
+# Set keys and the values below in .env (or export them)
+export FLY_APP_NAME=inngest-oss
+export FLY_REDIS_URL=redis://<redis-app>.internal:6379
+export INNGEST_POSTGRES_URI='postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/inngest?sslmode=require&options=-c%20search_path%3Dinngest'
+./scripts/up-fly.sh
+```
+
+Create the `inngest` database (or use another dedicated database) in Supabase. The session pooler URI must use port `5432`, include `sslmode=require`, and use a dedicated/non-tenant schema. The example uses `search_path=inngest`; do **not** use the tenant RLS schema `app`, and do not put Inngest system tables in it. URL-encode query parameters as shown. `INNGEST_POSTGRES_URI` is passed to Inngest unchanged.
+
+Fly terminates TLS at the edge, so `https://<FLY_APP_NAME>.fly.dev/health` is the health check. `fly.toml` disables auto-stop and keeps at least one machine running. Redis is expected to be a separate Fly app reachable on its private `.internal` address. Set `FLY_REDIS_URL` to its private URL; the deployment stores it as `INNGEST_REDIS_URI`.
+
+`./scripts/install.sh --print-env` remains the worker contract for either target and does not require `INNGEST_LIGHTSAIL_IP`. It prints `INNGEST_BASE_URL`, `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`, and `INNGEST_DEV=0`. Worker serve paths vary by framework: use `/api/inngest` for the OpsATC pilot and many Next.js/Express workers, or `/inngest` for Mastra. Put the actual public endpoint in `sync-apps.conf`.
+
+Fly sync is deliberately OSS poll-based: `./scripts/sync-apps.sh --write-yaml` regenerates `inngest.yaml` from `sync-apps.conf`; `FLY_APP_NAME=inngest-oss ./scripts/sync-apps.sh` deploys it. `./scripts/sync-apps.sh --check` only probes worker URLs. There is no Lightsail SSH on the Fly path and no Inngest Cloud REST sync (OSS returns 501).
+
+Clean-clone verification:
+
+```bash
+git clone https://github.com/PracticalWorks/inngest-vps.git && cd inngest-vps
+cp fly.toml.example fly.toml
+# configure .env, Supabase, Fly Redis, and sync-apps.conf
+./scripts/install.sh --print-env
+./scripts/up-fly.sh
+curl -fsS "https://${FLY_APP_NAME}.fly.dev/health"
+FLY_APP_NAME="$FLY_APP_NAME" ./scripts/sync-apps.sh --check
+FLY_APP_NAME="$FLY_APP_NAME" ./scripts/sync-apps.sh --write-yaml
+FLY_APP_NAME="$FLY_APP_NAME" ./scripts/sync-apps.sh
+```
+
 
 | Piece | Role |
 |-------|------|
@@ -159,7 +196,9 @@ Postgres backups: `scripts/backup-pg.sh` (cron on the VPS).
 
 ```
 inngest-vps/
-├── docker-compose.yml      # Inngest + Postgres + Redis + Caddy
+├── docker-compose.yml      # Lightsail Inngest + Postgres + Redis + Caddy
+├── fly.toml.example       # Fly app config (copy to fly.toml)
+├── Dockerfile             # Fly Inngest image with poll config
 ├── Caddyfile
 ├── inngest.yaml.example    # generated → inngest.yaml (gitignored)
 ├── sync-apps.conf.example  # copy → sync-apps.conf (gitignored)
