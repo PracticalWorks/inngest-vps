@@ -12,7 +12,7 @@ load_local_env
 : "${FLY_REGION:=iad}"
 export FLY_APP_NAME FLY_REGION
 : "${FLY_REDIS_URL:?Set FLY_REDIS_URL to the Fly Redis private URL}"
-: "${INNGEST_POSTGRES_URI:?Set INNGEST_POSTGRES_URI to Supabase's session pooler URI with sslmode=require}"
+: "${INNGEST_POSTGRES_URI:?Set INNGEST_POSTGRES_URI to the Supabase session pooler URI with sslmode=require}"
 : "${INNGEST_EVENT_KEY:?Set INNGEST_EVENT_KEY}"
 : "${INNGEST_SIGNING_KEY:?Set INNGEST_SIGNING_KEY}"
 
@@ -20,10 +20,14 @@ export FLY_APP_NAME FLY_REGION
   echo "INNGEST_POSTGRES_URI must include sslmode=require" >&2
   exit 1
 }
-[[ "${INNGEST_POSTGRES_URI}" != *"schema=app"* ]] || {
-  echo "INNGEST_POSTGRES_URI must not use tenant schema app" >&2
-  exit 1
-}
+normalized_postgres_uri="${INNGEST_POSTGRES_URI//%3D/=}"
+normalized_postgres_uri="${normalized_postgres_uri//%3d/=}"
+case "$normalized_postgres_uri" in
+  *search_path=app[^a-zA-Z0-9_]*|*search_path=app|*schema=app[^a-zA-Z0-9_]*|*schema=app)
+    echo "INNGEST_POSTGRES_URI must not target the tenant schema app" >&2
+    exit 1
+    ;;
+esac
 
 flyctl apps create "$FLY_APP_NAME" 2>/dev/null || true
 if [[ ! -f "${ROOT}/fly.toml" ]]; then

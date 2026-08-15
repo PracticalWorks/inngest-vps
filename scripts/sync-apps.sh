@@ -6,7 +6,8 @@
 # inngest.yaml from sync-apps.conf, and recreates the Inngest container.
 #
 # Usage:
-#   ./scripts/sync-apps.sh              # probe + reload server
+#   ./scripts/sync-apps.sh              # probe + reload Lightsail server
+#   ./scripts/sync-apps.sh --fly        # probe + deploy Fly server
 #   ./scripts/sync-apps.sh --check      # probe serve URLs only
 #   ./scripts/sync-apps.sh --write-yaml # regenerate inngest.yaml locally
 #
@@ -15,7 +16,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/common.sh"
-load_local_env
+
+TARGET="${INNGEST_TARGET:-lightsail}"
+for arg in "$@"; do
+  case "$arg" in
+    --fly) TARGET="fly" ;;
+  esac
+done
 
 CONF="$(inngest_repo_root)/sync-apps.conf"
 YAML="$(inngest_repo_root)/inngest.yaml"
@@ -86,8 +93,9 @@ reload_inngest_server() {
 
   # Fly deploys the generated poll config with the image. It never needs the
   # Lightsail IP or SSH, and it does not use Inngest Cloud's REST sync API.
-  if [[ -n "${FLY_APP_NAME:-}" ]]; then
-    fly_app="$FLY_APP_NAME"
+  if [[ "$TARGET" == "fly" ]]; then
+    load_local_env
+    fly_app="${FLY_APP_NAME:?Set FLY_APP_NAME for --fly sync}"
     [[ -f "${root}/fly.toml" ]] || {
       echo "Missing ${root}/fly.toml — run ./scripts/up-fly.sh first"
       exit 1
@@ -119,6 +127,11 @@ main() {
       write_inngest_yaml
       echo "Wrote ${YAML}"
       exit 0
+      ;;
+    --fly)
+      shift
+      main "$@"
+      exit $?
       ;;
     --check)
       echo "Probing worker serve URLs:"

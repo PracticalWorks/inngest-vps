@@ -56,7 +56,7 @@ Fly terminates TLS at the edge, so `https://<FLY_APP_NAME>.fly.dev/health` is th
 
 `./scripts/install.sh --print-env` remains the worker contract for either target and does not require `INNGEST_LIGHTSAIL_IP`. It prints `INNGEST_BASE_URL`, `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`, and `INNGEST_DEV=0`. Worker serve paths vary by framework: use `/api/inngest` for the OpsATC pilot and many Next.js/Express workers, or `/inngest` for Mastra. Put the actual public endpoint in `sync-apps.conf`.
 
-Fly sync is deliberately OSS poll-based: `./scripts/sync-apps.sh --write-yaml` regenerates `inngest.yaml` from `sync-apps.conf`; `FLY_APP_NAME=inngest-oss ./scripts/sync-apps.sh` deploys it. `./scripts/sync-apps.sh --check` only probes worker URLs. There is no Lightsail SSH on the Fly path and no Inngest Cloud REST sync (OSS returns 501).
+Fly sync is deliberately OSS poll-based: `./scripts/sync-apps.sh --write-yaml` regenerates `inngest.yaml` from `sync-apps.conf`; `./scripts/sync-apps.sh --fly` deploys it. `./scripts/sync-apps.sh --check` only probes worker URLs. The default sync target is Lightsail, so a `FLY_APP_NAME` in `.env` or the shell cannot change an existing Lightsail command; choose Fly explicitly with `--fly` (or `INNGEST_TARGET=fly`). There is no Lightsail SSH on the Fly path and no Inngest Cloud REST sync (OSS returns 501).
 
 Clean-clone verification:
 
