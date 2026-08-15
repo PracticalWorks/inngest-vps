@@ -1,0 +1,8 @@
+.env
+.env.bak.*
+.setup.local
+terraform/
+certs/
+backups/
+rotate.conf
+.git/

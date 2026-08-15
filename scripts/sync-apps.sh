@@ -6,7 +6,8 @@
 # inngest.yaml from sync-apps.conf, and recreates the Inngest container.
 #
 # Usage:
-#   ./scripts/sync-apps.sh              # probe + reload server
+#   ./scripts/sync-apps.sh              # probe + reload Lightsail server
+#   ./scripts/sync-apps.sh --fly        # probe + deploy Fly server
 #   ./scripts/sync-apps.sh --check      # probe serve URLs only
 #   ./scripts/sync-apps.sh --write-yaml # regenerate inngest.yaml locally
 #
@@ -15,6 +16,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/scripts/lib/common.sh"
+
+TARGET="${INNGEST_TARGET:-lightsail}"
+for arg in "$@"; do
+  case "$arg" in
+    --fly) TARGET="fly" ;;
+  esac
+done
 
 CONF="$(inngest_repo_root)/sync-apps.conf"
 YAML="$(inngest_repo_root)/inngest.yaml"
@@ -78,21 +86,33 @@ probe_url() {
 }
 
 reload_inngest_server() {
-  local ip host root
+  local ip host root fly_app
   root="$(inngest_repo_root)"
 
-  ip="$(get_ip)" || {
-    echo "No VPS IP — run ./scripts/up.sh first"
-    exit 1
-  }
-  host="ubuntu@${ip}"
-
   write_inngest_yaml
-  echo "→ rsync config to ${host}:${REMOTE_DIR}/"
-  rsync -avz "$YAML" "${root}/docker-compose.yml" "${host}:${REMOTE_DIR}/"
 
-  echo "→ recreate Inngest container (applies inngest.yaml mount)"
-  ssh "${SSH_OPTS[@]}" "$host" "cd ${REMOTE_DIR} && if docker info >/dev/null 2>&1; then docker compose up -d inngest; else sudo docker compose up -d inngest; fi"
+  # Fly deploys the generated poll config with the image. It never needs the
+  # Lightsail IP or SSH, and it does not use Inngest Cloud's REST sync API.
+  if [[ "$TARGET" == "fly" ]]; then
+    load_local_env
+    fly_app="${FLY_APP_NAME:?Set FLY_APP_NAME for --fly sync}"
+    [[ -f "${root}/fly.toml" ]] || {
+      echo "Missing ${root}/fly.toml — run ./scripts/up-fly.sh first"
+      exit 1
+    }
+    echo "→ deploy generated inngest.yaml to Fly app ${fly_app}"
+    flyctl deploy --config "${root}/fly.toml" --app "$fly_app" --remote-only
+  else
+    ip="$(get_ip)" || {
+      echo "No VPS IP — run ./scripts/up.sh first"
+      exit 1
+    }
+    host="ubuntu@${ip}"
+    echo "→ rsync config to ${host}:${REMOTE_DIR}/"
+    rsync -avz "$YAML" "${root}/docker-compose.yml" "${host}:${REMOTE_DIR}/"
+    echo "→ recreate Inngest container (applies inngest.yaml mount)"
+    ssh "${SSH_OPTS[@]}" "$host" "cd ${REMOTE_DIR} && if docker info >/dev/null 2>&1; then docker compose up -d inngest; else sudo docker compose up -d inngest; fi"
+  fi
 
   echo
   echo "Server reloading. Poll interval: 60s."
@@ -107,6 +127,11 @@ main() {
       write_inngest_yaml
       echo "Wrote ${YAML}"
       exit 0
+      ;;
+    --fly)
+      shift
+      main "$@"
+      exit $?
       ;;
     --check)
       echo "Probing worker serve URLs:"
