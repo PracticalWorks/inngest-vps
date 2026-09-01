@@ -8,6 +8,11 @@
 
 {$INNGEST_DOMAIN:inngest.example.com} {
 	encode gzip
+	# Inngest Connect (FACT-1016): the connect gateway is a separate listener on
+	# 8289 inside the inngest container; workers upgrade to WebSocket at
+	# /v0/connect. Caddy proxies WS natively; everything else stays on the API port.
+	# Workers rewrite the advertised ws://<host>:8289 endpoint to wss://<host>.
+	reverse_proxy /v0/connect inngest:8289
 	reverse_proxy inngest:8288
 }
 
