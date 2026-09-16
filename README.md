@@ -6,6 +6,16 @@ The original Lightsail/Terraform path remains the default. The additive Fly targ
 
 Inngest Cloud is great, but the Hobby tier caps concurrency and crons. Self-hosting gives you full control for about **$12/month** on a 2 GB Lightsail box. Inngest ships Docker images and docs, but there is no single "deploy button" for a production-ready stack with TLS, Postgres, and Redis. This repo is that button.
 
+## Automated tests
+
+The deployment guards have a credential-free shell test. Run it from the repository root:
+
+```bash
+./scripts/deploy-config.test.sh
+```
+
+It exercises both sync modes with command stubs, verifies that Fly mode does not invoke SSH or rsync, verifies that an ambient `FLY_APP_NAME` does not redirect the default Lightsail mode, and verifies that an invalid Supabase schema or missing `sslmode=require` fails before `flyctl` is called.
+
 ## How this compares to Inngest's deployment options
 
 [Inngest's deployment docs](https://www.inngest.com/docs/platform/deployment) list six paths. They solve different problems:
