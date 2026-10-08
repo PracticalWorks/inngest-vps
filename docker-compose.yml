@@ -9,6 +9,9 @@ services:
     restart: unless-stopped
     environment:
       INNGEST_DOMAIN: ${INNGEST_DOMAIN:-inngest.example.com}
+      # Gate for /mcp (Caddyfile). The value lives only in .env; MCP clients send it as
+      # `Authorization: Bearer <INNGEST_API_KEY>` (the factory's .mcp.json). Unset = /mcp closed.
+      INNGEST_MCP_BEARER: ${INNGEST_MCP_BEARER:-}
     ports:
       - "80:80"
       - "443:443"

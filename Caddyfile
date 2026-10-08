@@ -8,6 +8,15 @@
 
 {$INNGEST_DOMAIN:inngest.example.com} {
 	encode gzip
+	# /mcp (v1.40+) hands out MCP sessions with no credentials, and its tools include
+	# invoke_function and cancel_run (FACT-1675). The factory's .mcp.json already sends
+	# `Authorization: Bearer ${INNGEST_API_KEY}`; the server never checked it, so Caddy does.
+	# Unset INNGEST_MCP_BEARER falls back to a value no client sends: closed, not open.
+	@mcp_denied {
+		path /mcp /mcp/*
+		not header Authorization "Bearer {$INNGEST_MCP_BEARER:unset-inngest-mcp-bearer-denies-all}"
+	}
+	respond @mcp_denied "Unauthorized" 401
 	# Inngest Connect (FACT-1016): the connect gateway is a separate listener on
 	# 8289 inside the inngest container; workers upgrade to WebSocket at
 	# /v0/connect. Caddy proxies WS natively; everything else stays on the API port.
