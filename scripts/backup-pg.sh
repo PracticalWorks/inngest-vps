@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly Postgres backup. Install on VPS via cron:
+# Nightly Postgres backup. Installed in root's crontab on the VPS by remote-bootstrap.sh:
 #   0 3 * * * /opt/inngest/scripts/backup-pg.sh >> /var/log/inngest-pg-backup.log 2>&1
 
 set -euo pipefail

@@ -58,7 +58,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # A version upgrade migrates the database before the API listens: v1.27 -> v1.46 on a
+      # 12 GB database took ~4 min (FACT-1675). Failures inside start_period do not count, so
+      # `up -d` waits for the migration instead of marking inngest unhealthy and leaving
+      # caddy (depends_on service_healthy) stopped.
+      start_period: 15m
     deploy:
       resources:
         limits:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Nightly run-history retention (Inngest's self-hosting runbook, see pg-retention.sql).
-# Installed on the VPS by remote-bootstrap.sh:
+# Installed in root's crontab on the VPS by remote-bootstrap.sh:
 #   30 3 * * * /opt/inngest/scripts/pg-retention.sh >> /var/log/inngest-pg-retention.log 2>&1
 # Runs after the 03:00 backup, so the last backup still holds what this deletes.
 
