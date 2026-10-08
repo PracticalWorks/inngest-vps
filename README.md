@@ -190,6 +190,8 @@ ssh ubuntu@$(terraform -chdir=terraform/aws output -raw static_ip) \
   'cd /opt/inngest && sudo docker compose logs -f inngest'
 ```
 
+Inngest's MCP endpoint (`/mcp`, v1.40+) issues sessions without checking credentials, and its tools can invoke and cancel functions. Caddy only passes `/mcp` requests carrying `Authorization: Bearer $INNGEST_MCP_BEARER` (set in `.env`, never committed); anything else gets `401`, and an unset value closes `/mcp` entirely. Clients such as the factory's `.mcp.json` send the same value as `INNGEST_API_KEY`. Rotate by changing both and recreating `caddy`.
+
 Nightly jobs on the VPS, installed by `remote-bootstrap.sh` on every deploy:
 
 - `scripts/backup-pg.sh` (03:00): Postgres dump, kept 14 days.
