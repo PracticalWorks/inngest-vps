@@ -32,7 +32,9 @@ services:
         max-file: "3"
 
   inngest:
-    image: inngest/inngest:v1.27.0
+    # v1.42 fixed the runs list hanging on large Postgres deployments (#4718); v1.41 and
+    # v1.44 fixed Connect state regressions and lost-ACK lease renewal (#4685, #4687, #4774).
+    image: inngest/inngest:v1.46.0
     restart: unless-stopped
     command: inngest start --config /etc/inngest/inngest.yaml
     volumes:
@@ -70,6 +72,17 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    # Sized for the 512M cap below on a 2 GB SSD box (stock Postgres assumes far less):
+    # the planner assumes ~384MB of cache, sorts behind the runs list get 8MB before
+    # spilling to disk, and random reads are priced as SSD.
+    command: >
+      postgres
+      -c shared_buffers=128MB
+      -c effective_cache_size=384MB
+      -c work_mem=8MB
+      -c maintenance_work_mem=64MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
     environment:
       POSTGRES_DB: inngest
       POSTGRES_USER: inngest
