@@ -1,4 +1,4 @@
-FROM inngest/inngest:v1.27.0
+FROM inngest/inngest:v1.46.0
 
 COPY inngest.yaml /etc/inngest/inngest.yaml
 

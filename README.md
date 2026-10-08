@@ -190,7 +190,10 @@ ssh ubuntu@$(terraform -chdir=terraform/aws output -raw static_ip) \
   'cd /opt/inngest && sudo docker compose logs -f inngest'
 ```
 
-Postgres backups: `scripts/backup-pg.sh` (cron on the VPS).
+Nightly jobs on the VPS, installed by `remote-bootstrap.sh` on every deploy:
+
+- `scripts/backup-pg.sh` (03:00): Postgres dump, kept 14 days.
+- `scripts/pg-retention.sh` (03:30): deletes run history for runs that **finished** more than 14 days ago, following Inngest's self-hosting runbook (`docs/POSTGRES_RETENTION.md` in inngest/inngest). Self-hosted Inngest never truncates history on its own, and the runs list slows as it grows. In-flight runs are never touched. Log: `/var/log/inngest-pg-retention.log`.
 
 ## Project layout
 
