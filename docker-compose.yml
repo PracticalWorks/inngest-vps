@@ -12,6 +12,15 @@ services:
       # Gate for /mcp (Caddyfile). The value lives only in .env; MCP clients send it as
       # `Authorization: Bearer <INNGEST_API_KEY>` (the factory's .mcp.json). Unset = /mcp closed.
       INNGEST_MCP_BEARER: ${INNGEST_MCP_BEARER:-}
+      # Machine credential for the dashboard GraphQL API /v0/gql (HOMEINFRA-195): callers send
+      # `Authorization: Bearer <signing key>`. Same value the inngest service gets; a key
+      # rotation must recreate caddy too. Unset = /v0/gql reachable only by basic auth.
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-}
+      # Human login for the dashboard (basic auth, HOMEINFRA-195). HASH is a bcrypt hash from
+      # `caddy hash-password`, single-quoted in .env so compose does not interpolate its `$`.
+      # Either unset = dashboard closed.
+      INNGEST_DASHBOARD_USER: ${INNGEST_DASHBOARD_USER:-}
+      INNGEST_DASHBOARD_HASH: ${INNGEST_DASHBOARD_HASH:-}
     ports:
       - "80:80"
       - "443:443"

@@ -8,21 +8,66 @@
 
 {$INNGEST_DOMAIN:inngest.example.com} {
 	encode gzip
+
+	# Operator bearer for the dashboard GraphQL API (HOMEINFRA-195): the server's own
+	# INNGEST_SIGNING_KEY, which callers (factory, niche-fleet) already hold and
+	# rotate-inngest-keys.sh keeps in sync. The sentinel default is public (this repo is),
+	# so the expression also requires the key to be non-empty: unset means no bearer matches.
+	@operator_bearer {
+		header Authorization "Bearer {$INNGEST_SIGNING_KEY:unset-inngest-signing-key-denies-all}"
+		expression `{env.INNGEST_SIGNING_KEY} != ""`
+	}
+
 	# /mcp (v1.40+) hands out MCP sessions with no credentials, and its tools include
 	# invoke_function and cancel_run (FACT-1675). The factory's .mcp.json already sends
 	# `Authorization: Bearer ${INNGEST_API_KEY}`; the server never checked it, so Caddy does.
 	# Unset INNGEST_MCP_BEARER falls back to a value no client sends: closed, not open.
+	@mcp path /mcp /mcp/*
 	@mcp_denied {
 		path /mcp /mcp/*
 		not header Authorization "Bearer {$INNGEST_MCP_BEARER:unset-inngest-mcp-bearer-denies-all}"
 	}
-	respond @mcp_denied "Unauthorized" 401
-	# Inngest Connect (FACT-1016): the connect gateway is a separate listener on
-	# 8289 inside the inngest container; workers upgrade to WebSocket at
-	# /v0/connect. Caddy proxies WS natively; everything else stays on the API port.
-	# Workers rewrite the advertised ws://<host>:8289 endpoint to wss://<host>.
-	reverse_proxy /v0/connect inngest:8289
-	reverse_proxy inngest:8288
+	handle @mcp {
+		respond @mcp_denied "Unauthorized" 401
+		reverse_proxy inngest:8288
+	}
+
+	# SDK / worker routes (HOMEINFRA-195). Each is authenticated by the server itself
+	# (signing key, event key, or a run-scoped JWT), or is /health. Derived from the
+	# inngest/inngest v1.46.0 router; see README "Ops" for the route-by-route list.
+	# Anything not named here is operator-only.
+	@sdk path /e/* /fn/* /v0/connect /v0/connect/* /v0/runs/* /v0/telemetry /v1/* /api/v2/* /v2/* /health /dev /dev/*
+	handle @sdk {
+		# Inngest Connect (FACT-1016): the connect gateway is a separate listener on
+		# 8289 inside the inngest container; workers upgrade to WebSocket at
+		# /v0/connect. Caddy proxies WS natively; everything else stays on the API port.
+		# Workers rewrite the advertised ws://<host>:8289 endpoint to wss://<host>.
+		reverse_proxy /v0/connect inngest:8289
+		reverse_proxy inngest:8288
+	}
+
+	# Everything else is operator-only: the dashboard SPA and its GraphQL API (/v0/gql,
+	# which exposes invokeFunction, rerun, cancelRun, create/update/deleteApp), the
+	# playground at /v0, the unauthenticated POST /invoke/{slug}, /debug (pprof) and
+	# /metrics. Machines pass with the operator bearer; a human gets one basic-auth
+	# prompt. Unset INNGEST_DASHBOARD_USER/HASH fall back to a user nobody has and a
+	# hash of a discarded random password: closed, not open. The credential is stripped
+	# before proxying so it never reaches the inngest logs.
+	# `route` keeps this order literal (Caddy would otherwise run basic_auth and
+	# request_header before the bearer check).
+	handle {
+		route {
+			handle @operator_bearer {
+				request_header -Authorization
+				reverse_proxy inngest:8288
+			}
+			basic_auth {
+				{$INNGEST_DASHBOARD_USER:unset-dashboard-user-denies-all} {$INNGEST_DASHBOARD_HASH:$2a$14$lYXQWjF7cnjexf45C3faHOZ8EhTH.ZBoTwsKKvvqJKO57lWiQzOCC}
+			}
+			request_header -Authorization
+			reverse_proxy inngest:8288
+		}
+	}
 }
 
 # --- Option B: Cloudflare origin cert (uncomment + mount ./certs) ---

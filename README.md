@@ -127,6 +127,7 @@ After provision completes:
 | `./scripts/install.sh --print-env` | Worker env vars to copy |
 | `./scripts/sync-apps.sh` | Probe workers + reload Inngest poll config |
 | `./scripts/sync-apps.sh --check` | Probe worker URLs only |
+| `./scripts/test-caddy-gate.sh` | Prove the Caddy auth gate (docker; no VPS) |
 
 ## Connect your apps
 
@@ -192,6 +193,50 @@ ssh ubuntu@$(terraform -chdir=terraform/aws output -raw static_ip) \
 
 Inngest's MCP endpoint (`/mcp`, v1.40+) issues sessions without checking credentials, and its tools can invoke and cancel functions. Caddy only passes `/mcp` requests carrying `Authorization: Bearer $INNGEST_MCP_BEARER` (set in `.env`, never committed); anything else gets `401`, and an unset value closes `/mcp` entirely. Clients such as the factory's `.mcp.json` send the same value as `INNGEST_API_KEY`. Rotate by changing both and recreating `caddy`.
 
+### Proxy gate: dashboard and GraphQL API (HOMEINFRA-195)
+
+Inngest serves its dashboard and its GraphQL API (`/v0/gql`) with no authentication, and the schema includes `invokeFunction`, `rerun`, `cancelRun` and `createApp`/`updateApp`/`deleteApp`. The server also answers `POST /invoke/{slug}` without checking keys, and exposes `/debug` (pprof) and `/metrics`. Caddy therefore splits every request three ways:
+
+| Paths | Who passes |
+|---|---|
+| `/e/*`, `/fn/*`, `/v0/connect`, `/v0/connect/*`, `/v0/runs/*`, `/v0/telemetry`, `/v1/*`, `/api/v2/*`, `/v2/*`, `/health`, `/dev`, `/dev/*` | Anyone. The server authenticates these itself. |
+| `/mcp`, `/mcp/*` | `Authorization: Bearer $INNGEST_MCP_BEARER` only (see above) |
+| Everything else: `/`, every dashboard route and asset, `/v0`, `/v0/gql`, `/invoke/*`, `/debug/*`, `/metrics` | `Authorization: Bearer $INNGEST_SIGNING_KEY` (machines) **or** basic auth `INNGEST_DASHBOARD_USER` / `INNGEST_DASHBOARD_HASH` (humans) |
+
+Caddy strips the credential before proxying the operator paths, so it never reaches the inngest logs. If a value is unset, its gate is **closed**, not open.
+
+**Why the SDK list is complete.** It comes from the inngest/inngest **v1.46.0** router (`pkg/devserver/devserver.go` mounts, `pkg/api/api.go`, `pkg/devserver/api.go`, `pkg/coreapi/coreapi.go`, `pkg/api/apiv1/apiv1.go`, `pkg/connect/service.go`):
+
+- `/e/{key}`: event ingest. Checked against the event key.
+- `/fn/register`: app sync, signing key. `/fn/remove` and `/fn/*-limit` sit in the same signing-key group.
+- `/v0/connect/start` and `/v0/connect/flush` (signing key) on 8288. The Connect WebSocket at `/v0/connect` goes to the gateway on 8289, which checks a JWT minted by `start`.
+- `/v0/runs/{id}/batch|actions`: the SDK's large-payload fetch. `DELETE /v0/runs/{id}` and `/v0/telemetry` are signing-key routes too.
+- `/v1/*`: checkpoint (`/v1/checkpoint`, `/v1/http/runs`), signals, events, runs, cancellations, traces and realtime. All use signing-key middleware, except checkpoint `output` and realtime, which use run-scoped JWTs.
+- `/api/v2/*` and the alias `/v2/*`: signing key. `/api/v2/operations` is a read-only catalog.
+- `/health`: anonymous liveness. `/dev`: signing key. `/dev/traces` is an anonymous OTLP intake that was already public and is left as it was.
+
+A route missing from the list fails closed: the SDK would get a basic-auth `401`, never an open door. If an Inngest upgrade adds an SDK route, add it to `@sdk` in the `Caddyfile` and to `scripts/test-caddy-gate.sh`.
+
+**Logging into the dashboard.** Open `https://$INNGEST_DOMAIN/`. The browser asks for a username and password once and reuses them for the SPA's `/v0/gql` calls. To set or change the login:
+
+```bash
+docker run --rm -it caddy:2-alpine caddy hash-password   # prompts; prints a bcrypt hash
+# in .env on the VPS (single quotes, or compose interpolates the $):
+#   INNGEST_DASHBOARD_USER=<name>
+#   INNGEST_DASHBOARD_HASH='<hash>'
+sudo docker compose up -d --force-recreate caddy
+```
+
+**Machine callers** send `Authorization: Bearer <INNGEST_SIGNING_KEY>` to `/v0/gql`. `scripts/rotate-inngest-keys.sh` reads the key from `.env` and recreates **both** `inngest` and `caddy` on rotation, so the gate always follows the current key. Any caller outside the script's `WORKERS` list must get the new key too.
+
+**Deploy order.** Every `/v0/gql` caller must send the bearer **before** this gate deploys, or it starts getting `401`:
+
+1. factory `apps/mcp` `inngest-runs.ts` and `packages/ops` verify-sweep
+2. niche-fleet `inngest-registration.ts`
+3. then this repo: set `INNGEST_DASHBOARD_USER` and `INNGEST_DASHBOARD_HASH` in the VPS `.env` (`INNGEST_SIGNING_KEY` is already there), deploy, and recreate `caddy`.
+
+**Test the gate** locally or in CI (needs docker and curl): `./scripts/test-caddy-gate.sh`. It runs `caddy validate`, then a curl matrix against the real `Caddyfile` with a stub upstream, with credentials set and with them unset.
+
 Nightly jobs on the VPS, installed by `remote-bootstrap.sh` on every deploy:
 
 - `scripts/backup-pg.sh` (03:00): Postgres dump, kept 14 days.
@@ -212,6 +257,7 @@ inngest-vps/
 │   ├── provision.sh        # Terraform + install
 │   ├── install.sh          # rsync stack to VPS
 │   ├── sync-apps.sh        # worker registration (OSS poll)
+│   ├── test-caddy-gate.sh  # Caddyfile auth-gate test matrix
 │   └── lib/                # aws + shared helpers
 └── terraform/aws/        # Lightsail
 ```
