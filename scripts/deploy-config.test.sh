@@ -84,15 +84,23 @@ run_invalid_uri() (
     INNGEST_EVENT_KEY=event INNGEST_SIGNING_KEY=signing ./scripts/up-fly.sh
 )
 
+rm -f "$TMP/flyctl.called"
 if run_invalid_uri 'postgresql://db/inngest?sslmode=require&options=-c%20search_path%3Dapp' >"$TMP/schema.out" 2>&1; then
-  fail "tenant schema app must fail before flyctl"
+  schema_status=0
+else
+  schema_status=$?
 fi
+(( schema_status != 0 )) || fail "tenant schema app must fail before flyctl"
 assert_contains "$(cat "$TMP/schema.out")" "must not target the tenant schema app"
 assert_not_called flyctl
 
+rm -f "$TMP/flyctl.called"
 if run_invalid_uri 'postgresql://db/inngest?options=-c%20search_path%3Dinngest' >"$TMP/ssl.out" 2>&1; then
-  fail "missing sslmode=require must fail before flyctl"
+  ssl_status=0
+else
+  ssl_status=$?
 fi
+(( ssl_status != 0 )) || fail "missing sslmode=require must fail before flyctl"
 assert_contains "$(cat "$TMP/ssl.out")" "must include sslmode=require"
 assert_not_called flyctl
 
