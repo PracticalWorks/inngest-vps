@@ -100,8 +100,8 @@ if run_invalid_uri 'postgresql://db/inngest?options=-c%20search_path%3Dinngest' 
 else
   ssl_status=$?
 fi
+assert_not_called flyctl
 (( ssl_status != 0 )) || fail "missing sslmode=require must fail before flyctl"
 assert_contains "$(cat "$TMP/ssl.out")" "must include sslmode=require"
-assert_not_called flyctl
 
 echo "deploy config tests passed"
