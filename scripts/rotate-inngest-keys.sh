@@ -132,8 +132,15 @@ cf_redeploy() { cf GET "/api/v1/deploy?uuid=$2&force=false" >/dev/null && say " 
 verify_all() {
   local base rc=0; base="$(inngest_base_url)"
   say "== verify (rotation = reachable + connected=true) =="
-  local apps
+  # /v0/gql is operator-only (HOMEINFRA-195): send the CURRENT INNGEST_SIGNING_KEY from
+  # .env (already rewritten when this runs after a rotation) via a header file in $TMP,
+  # so the value is never in argv or output.
+  local apps bearer
+  bearer="$(sed -n -E "s/^INNGEST_SIGNING_KEY=['\"]?([^'\"]*)['\"]?[[:space:]]*$/\1/p" "$OPS_ENV" 2>/dev/null | tail -1)"
+  [[ -n "$bearer" ]] || die "INNGEST_SIGNING_KEY missing from ${OPS_ENV}; /v0/gql needs it."
+  printf 'Authorization: Bearer %s\n' "$bearer" >"${TMP}/gql.hdr"; bearer=""
   apps="$(curl -fsS --max-time 12 -X POST "${base}/v0/gql" -H 'Content-Type: application/json' \
+    -H @"${TMP}/gql.hdr" \
     --data '{"query":"query { apps { externalID url connected } }"}' 2>/dev/null || echo '{}')"
   while read -r url; do [[ -z "$url" ]] && continue
     local host intro mode row regurl conn
@@ -169,7 +176,7 @@ say "Generated a new event key + signing key (values not shown)."
 if [[ "$DRY" == 1 ]]; then
   say "DRY-RUN plan:"
   say "  1. rewrite ${OPS_ENV} (INNGEST_EVENT_KEY, INNGEST_SIGNING_KEY)"
-  say "  2. scp .env -> ${VPS_HOST}:${VPS_INNGEST_DIR}/.env ; recreate 'inngest' container"
+  say "  2. scp .env -> ${VPS_HOST}:${VPS_INNGEST_DIR}/.env ; recreate 'inngest' + 'caddy' (caddy gates /v0/gql on the signing key)"
   say "  3. for each worker URL, set both keys via Coolify API + redeploy:"
   while read -r u; do [[ -n "$u" ]] && say "       - $u"; done <<<"$WORKERS"
   say "  4. PUT each /inngest to re-register ; 5. verify reachable + connected=true"
@@ -196,12 +203,12 @@ say "Updated ${OPS_ENV} (backup saved)."
 # -----------------------------------------------------------------------------
 # 3. Push to the VPS + recreate the inngest container
 # -----------------------------------------------------------------------------
-say "Pushing new keys to the Inngest server (${VPS_HOST}) and recreating the container..."
+say "Pushing new keys to the Inngest server (${VPS_HOST}) and recreating inngest + caddy..."
 scp "${SSH_OPTS[@]}" "$OPS_ENV" "${VPS_HOST}:${VPS_INNGEST_DIR}/.env" \
   || die "scp .env to VPS failed (check VPS_HOST / SSH access)"
 ssh "${SSH_OPTS[@]}" "$VPS_HOST" \
-  "cd ${VPS_INNGEST_DIR} && (docker compose up -d --force-recreate inngest || sudo docker compose up -d --force-recreate inngest)" \
-  || die "Failed to recreate inngest container on the VPS"
+  "cd ${VPS_INNGEST_DIR} && (docker compose up -d --force-recreate inngest caddy || sudo docker compose up -d --force-recreate inngest caddy)" \
+  || die "Failed to recreate inngest + caddy on the VPS"
 say "Inngest server recreated with the new keys."
 
 # -----------------------------------------------------------------------------
