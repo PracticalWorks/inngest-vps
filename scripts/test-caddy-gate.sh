@@ -124,8 +124,10 @@ sdk_matrix() {
 
 echo "== credentials SET =="
 start_caddy -e INNGEST_SIGNING_KEY -e INNGEST_MCP_BEARER -e INNGEST_DASHBOARD_USER -e INNGEST_DASHBOARD_HASH
-check 401 - "anonymous  POST /v0/gql"                       "${GQL[@]}" "$B/v0/gql"
+check 401 - "anonymous  POST /v0/gql query"                 "${GQL[@]}" "$B/v0/gql"
 check 401 - "anonymous  GET  /v0/gql/"                      "$B/v0/gql/"
+check 401 - "anonymous  GET  /v0/gql query"                --get --data-urlencode 'query={ apps { name } }' "$B/v0/gql"
+check 401 - "anonymous  GET  /v0/gql bare"                 "$B/v0/gql"
 check 401 - "wrong bearer POST /v0/gql"                     "${GQL[@]}" -H @"${TMP}/wrong-bearer.hdr" "$B/v0/gql"
 check 401 - "public sentinel bearer POST /v0/gql"           "${GQL[@]}" -H @"${TMP}/sentinel-bearer.hdr" "$B/v0/gql"
 check 401 - "wrong basic POST /v0/gql"                      "${GQL[@]}" -K "${TMP}/wrong-basic.curlrc" "$B/v0/gql"
@@ -150,7 +152,9 @@ sdk_matrix
 
 echo "== credentials UNSET (must be closed) =="
 start_caddy -e INNGEST_SIGNING_KEY= -e INNGEST_MCP_BEARER= -e INNGEST_DASHBOARD_USER= -e INNGEST_DASHBOARD_HASH=
-check 401 - "anonymous  POST /v0/gql"                       "${GQL[@]}" "$B/v0/gql"
+check 401 - "anonymous  POST /v0/gql query"                 "${GQL[@]}" "$B/v0/gql"
+check 401 - "anonymous  GET  /v0/gql query"                --get --data-urlencode 'query={ apps { name } }' "$B/v0/gql"
+check 401 - "anonymous  GET  /v0/gql bare"                 "$B/v0/gql"
 check 401 - "public sentinel bearer POST /v0/gql"           "${GQL[@]}" -H @"${TMP}/sentinel-bearer.hdr" "$B/v0/gql"
 check 401 - "'Bearer ' (empty) POST /v0/gql"                "${GQL[@]}" -H 'Authorization: Bearer ' "$B/v0/gql"
 check 401 - "sentinel basic user GET /"                     -K "${TMP}/sentinel-basic.curlrc" "$B/"
