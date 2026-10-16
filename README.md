@@ -235,7 +235,36 @@ sudo docker compose up -d --force-recreate caddy
 2. niche-fleet `inngest-registration.ts`
 3. then this repo: set `INNGEST_DASHBOARD_USER` and `INNGEST_DASHBOARD_HASH` in the VPS `.env` (`INNGEST_SIGNING_KEY` is already there), deploy, and recreate `caddy`.
 
-**Test the gate** locally or in CI (needs docker and curl): `./scripts/test-caddy-gate.sh`. It runs `caddy validate`, then a curl matrix against the real `Caddyfile` with a stub upstream, with credentials set and with them unset.
+**Access-log audit for anonymous GraphQL writes.** After each deployment, record the deployment time or commit and inspect the Caddy JSON access log from that time through now. This is a read-only audit; do not copy `.env`, headers, request bodies, or response bodies into the record. The log filter removes `Authorization` before output. From the VPS, use the service's configured Docker log retention window:
+
+```bash
+SINCE='2026-10-08T00:00:00Z'  # replace with the deployment start; do not include credentials
+sudo docker logs --since "$SINCE" caddy 2>/dev/null \
+  | jq -r '
+      (.request.uri // "") as $uri
+      | ($uri | split("?")[0]) as $path
+      | select($path == "/v0/gql" and (.request.method == "POST" or .request.method == "GET"))
+      | [(.ts // "-"), .request.method,
+         (if .request.method == "POST" then "POST-body-not-retained"
+          elif ($uri | contains("?query=")) then "GET-query-present"
+          else "GET-no-query" end),
+         $uri, (.status // 0), (.request.remote_ip // "-")] | @tsv' \
+  > /tmp/inngest-anonymous-gql-access.tsv
+```
+
+The third TSV column is the operation indicator. `POST-body-not-retained` means the request was a write-capable GraphQL POST, but Caddy does not retain its body, so this log cannot identify the named GraphQL operation. `GET-query-present` means a query string was supplied; `GET-no-query` is the bare endpoint. The method/path indicator is the honest limit of this audit: do not claim that a named mutation was or was not observed from these logs alone. A `2xx` response to any anonymous-looking POST is the finding to investigate, regardless of the operation name. Review the TSV for `401`/`403` responses and any `2xx`/`4xx` response that reached the upstream. The proxy strips credentials, so `/v0/gql` `2xx` responses are evidence that an accepted operator or dashboard credential was supplied, while `401`/`403` responses are anonymous or invalid-credential attempts. Never infer identity from an IP address. Record the command, time range, line count, status/method/operation-indicator summary, and the limitation that exact GraphQL operation names are unavailable. If the retained logs do not reach back to the deployment, record that limitation and the earliest available timestamp instead of claiming a clean history.
+
+**Machine-readable audit summary (no secrets):** The audit artifact is TSV, so summarize it with `awk`, not `jq`:
+
+```bash
+awk -F '\t' 'NF { counts[$2 "\t" $3 "\t" $5]++ }
+  END { for (key in counts) print counts[key], key }' \
+  /tmp/inngest-anonymous-gql-access.tsv | sort -k2,2 -k3,3 -k4,4n
+```
+
+The audit artifact contains timestamps, method, operation indicator, path, status, and remote IP only. Delete it after the card records the counts and finding.
+
+**Test the gate** locally or in CI (needs docker and curl): `./scripts/test-caddy-gate.sh`. It runs `caddy validate`, then a curl matrix against the real `Caddyfile` with a stub upstream, with credentials set and with them unset. The matrix includes anonymous bare and URL-encoded query-form GETs plus JSON POSTs to `/v0/gql`, and proves authenticated machine access still reaches the upstream without forwarding the credential.
 
 Nightly jobs on the VPS, installed by `remote-bootstrap.sh` on every deploy:
 
