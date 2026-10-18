@@ -9,6 +9,16 @@
 {$INNGEST_DOMAIN:inngest.example.com} {
 	encode gzip
 
+	# Keep an access trail without retaining bearer credentials. The audit procedure in
+	# README uses these JSON records to identify anonymous GraphQL writes.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			request>headers>Authorization delete
+		}
+	}
+
 	# Operator bearer for the dashboard GraphQL API (HOMEINFRA-195): the server's own
 	# INNGEST_SIGNING_KEY, which callers (factory, niche-fleet) already hold and
 	# rotate-inngest-keys.sh keeps in sync. The sentinel default is public (this repo is),
