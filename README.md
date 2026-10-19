@@ -243,7 +243,9 @@ sudo docker compose up -d --force-recreate caddy
 
 1. factory `apps/mcp` `inngest-runs.ts` and `packages/ops` verify-sweep
 2. niche-fleet `inngest-registration.ts`
-3. then this repo: set `INNGEST_DASHBOARD_USER` and `INNGEST_DASHBOARD_HASH` in the VPS `.env` (`INNGEST_SIGNING_KEY` is already there), deploy, and recreate `caddy`.
+3. then this repo: add `INNGEST_DASHBOARD_USER` and `INNGEST_DASHBOARD_HASH` to the **local** `.env` of the checkout that deploys the box (`INNGEST_SIGNING_KEY` is already there), run `./scripts/install.sh <ip>`, and recreate `caddy`.
+
+`install.sh` copies the local `.env` over the VPS's, so an edit made only on the VPS is lost on the next deploy. Before it copies anything it compares the two files by hash and prints names only (HOMEINFRA-229). Names the local file adds go through. A name the copy would delete or change stops the deploy, and so does a missing local `.env` when the VPS already has one, because `ensure_env` would mint new keys. `INSTALL_ENV_OVERWRITE=1` is the deliberate override. Tested by `./scripts/install-env-guard.test.sh` (stubbed ssh, no host needed).
 
 **Access-log audit for anonymous GraphQL writes.** After each deployment, record the deployment time or commit and inspect the Caddy JSON access log from that time through now. This is a read-only audit; do not copy `.env`, headers, request bodies, or response bodies into the record. The log filter removes `Authorization` before output. From the VPS, use the service's configured Docker log retention window:
 
@@ -274,7 +276,7 @@ awk -F '\t' 'NF { counts[$2 "\t" $3 "\t" $5]++ }
 
 The audit artifact contains timestamps, method, operation indicator, path, status, and remote IP only. Delete it after the card records the counts and finding.
 
-**Test the gate** locally or in CI (needs docker and curl): `./scripts/test-caddy-gate.sh`. It runs `caddy validate`, then a curl matrix against the real `Caddyfile` with a stub upstream, with credentials set and with them unset. The matrix includes anonymous bare and URL-encoded query-form GETs plus JSON POSTs to `/v0/gql`, and proves authenticated machine access still reaches the upstream without forwarding the credential.
+**Test the gate** locally or in CI (needs docker and curl): `./scripts/test-caddy-gate.sh`. It runs `caddy validate`, then a curl matrix against the real `Caddyfile` with a stub upstream, with credentials set and with them unset. The matrix includes anonymous bare and URL-encoded query-form GETs plus JSON POSTs to `/v0/gql`, and proves authenticated machine access still reaches the upstream without forwarding the credential. It also sends a real WebSocket upgrade to `/v0/connect` and checks that it reaches the gateway port with its `Upgrade` header.
 
 Nightly jobs on the VPS, installed by `remote-bootstrap.sh` on every deploy:
 

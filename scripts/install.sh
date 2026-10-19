@@ -65,6 +65,55 @@ HOST_RAW="${1:?Usage: ./scripts/provision.sh   or   ./scripts/install.sh IP}"
 HOST="$(normalize_host "$HOST_RAW")"
 IP="${HOST#*@}"
 
+# This script pushes the LOCAL .env over the VPS's, and ensure_env mints fresh keys when
+# the local file is missing. On a live box either one strands every app (signing and event
+# keys), drops a gate credential, or locks inngest out of its own Postgres (PG_PASSWORD)
+# (HOMEINFRA-229). So compare first, by hash, printing names only. New local names are
+# fine; a name the push would delete or change stops it. INSTALL_ENV_OVERWRITE=1 is the
+# deliberate override.
+guard_remote_env() {
+  if [[ "${INSTALL_ENV_OVERWRITE:-}" == 1 ]]; then
+    echo "INSTALL_ENV_OVERWRITE=1: the local .env replaces the VPS's without a comparison."
+    return 0
+  fi
+  local remote locl lh name hash problems=() adds=()
+  remote="$(ssh "${SSH_OPTS[@]}" "$HOST" "bash -s -- ${REMOTE_DIR}/.env" <"${ROOT}/scripts/env-manifest.sh")" \
+    || { echo "Could not read ${REMOTE_DIR}/.env on ${HOST} to compare it; refusing to overwrite it." >&2; exit 1; }
+  case "$remote" in
+    ABSENT) return 0 ;;
+    UNREADABLE) echo "${HOST}:${REMOTE_DIR}/.env exists but is unreadable; refusing to overwrite it." >&2; exit 1 ;;
+  esac
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "No local ${ENV_FILE}, but ${HOST} already has one. A deploy would mint new keys and" >&2
+    echo "replace the live ones. Run this from the checkout that holds the box's .env." >&2
+    exit 1
+  fi
+  locl="$(bash "${ROOT}/scripts/env-manifest.sh" "$ENV_FILE")"
+  # Last assignment wins, as in compose's .env.
+  remote="$(awk '{m[$1]=$2} END {for (k in m) print k, m[k]}' <<<"$remote" | sort)"
+  locl="$(awk '{m[$1]=$2} END {for (k in m) print k, m[k]}' <<<"$locl" | sort)"
+  while read -r name hash; do
+    [[ -n "$name" ]] || continue
+    lh="$(awk -v n="$name" '$1 == n {print $2}' <<<"$locl")"
+    if [[ -z "$lh" ]]; then problems+=("${name}: set on the VPS, missing locally (the push would delete it)")
+    elif [[ "$lh" != "$hash" ]]; then problems+=("${name}: differs from the VPS (the push would change it)")
+    fi
+  done <<<"$remote"
+  while read -r name hash; do
+    [[ -n "$name" ]] || continue
+    awk -v n="$name" '$1 == n {f=1} END {exit !f}' <<<"$remote" || adds+=("$name")
+  done <<<"$locl"
+  if (( ${#problems[@]} > 0 )); then
+    echo "Refusing to push the local .env over ${HOST}:${REMOTE_DIR}/.env:" >&2
+    printf '  %s\n' "${problems[@]}" >&2
+    echo "Make the local .env match the VPS, or rerun with INSTALL_ENV_OVERWRITE=1 if the change is deliberate." >&2
+    exit 1
+  fi
+  if (( ${#adds[@]} > 0 )); then echo "The local .env adds: ${adds[*]}"; fi
+  echo "Local .env matches the VPS's on every name it already holds."
+}
+guard_remote_env
+
 ensure_env
 chmod +x "${ROOT}/scripts/"*.sh "${ROOT}/scripts/lib/"*.sh 2>/dev/null || true
 

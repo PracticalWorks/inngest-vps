@@ -43,6 +43,9 @@ INNGEST_DASHBOARD_HASH="$(docker run --rm "$CADDY_IMAGE" caddy hash-password --p
 printf 'Authorization: Bearer %s\n' "$INNGEST_SIGNING_KEY" >"${TMP}/bearer.hdr"
 printf 'Authorization: Bearer %s\n' "$INNGEST_MCP_BEARER" >"${TMP}/mcp-bearer.hdr"
 printf 'Authorization: Bearer %s\n' "wrong-$(openssl rand -hex 8)" >"${TMP}/wrong-bearer.hdr"
+# The SDK form of the same key. The gate compares the raw hex, so callers strip the prefix
+# (factory inngest-runs.ts and verify-sweep, niche-fleet inngest-registration.ts).
+printf 'Authorization: Bearer signkey-prod-%s\n' "$INNGEST_SIGNING_KEY" >"${TMP}/prefixed-bearer.hdr"
 printf 'Authorization: Bearer %s\n' "unset-inngest-signing-key-denies-all" >"${TMP}/sentinel-bearer.hdr"
 printf 'Authorization: Bearer %s\n' "unset-inngest-mcp-bearer-denies-all" >"${TMP}/sentinel-mcp-bearer.hdr"
 printf 'user = "%s:%s"\n' "$INNGEST_DASHBOARD_USER" "$DASH_PASS" >"${TMP}/basic.curlrc"
@@ -55,7 +58,8 @@ class H(http.server.BaseHTTPRequestHandler):
     def _r(self):
         port = self.server.server_address[1]
         auth = "present" if self.headers.get("Authorization") else "absent"
-        body = f"{port} {self.path} auth={auth}".encode()
+        up = (self.headers.get("Upgrade") or "none").lower()
+        body = f"{port} {self.path} auth={auth} upgrade={up}".encode()
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
         self.wfile.write(body)
     do_GET = do_POST = do_PUT = do_DELETE = _r
@@ -115,6 +119,13 @@ sdk_matrix() {
   check 200 "8288 /v0/telemetry" "sdk telemetry POST /v0/telemetry" -X POST "$B/v0/telemetry"
   check 200 "8288 /v0/connect/start" "connect start POST /v0/connect/start" -X POST "$B/v0/connect/start"
   check 200 "8289 /v0/connect" "connect gateway GET /v0/connect (-> 8289)" "$B/v0/connect"
+  # What a Connect worker actually sends (HOMEINFRA-229): the upgrade must reach the gateway.
+  check 200 "8289 /v0/connect auth=absent upgrade=websocket" "connect WebSocket upgrade reaches 8289" \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$B/v0/connect"
+  check 200 "8288 /v0/connect/flush" "connect flush POST /v0/connect/flush" -X POST "$B/v0/connect/flush"
+  check 200 "8288 /fn/remove" "app remove POST /fn/remove"   -X POST "$B/fn/remove"
+  check 200 "8288 /v0/runs/r" "run cancel DELETE /v0/runs/r" -X DELETE "$B/v0/runs/r"
   check 200 "8288 /health" "health   GET /health"            "$B/health"
   check 200 "8288 /dev" "dev info  GET /dev"                    "$B/dev"
   check 200 "8288 /dev/traces" "otlp     POST /dev/traces"      -X POST "$B/dev/traces"
@@ -132,6 +143,7 @@ check 401 - "wrong bearer POST /v0/gql"                     "${GQL[@]}" -H @"${T
 check 401 - "public sentinel bearer POST /v0/gql"           "${GQL[@]}" -H @"${TMP}/sentinel-bearer.hdr" "$B/v0/gql"
 check 401 - "wrong basic POST /v0/gql"                      "${GQL[@]}" -K "${TMP}/wrong-basic.curlrc" "$B/v0/gql"
 check 401 - "MCP bearer POST /v0/gql (signing key only)"     "${GQL[@]}" -H @"${TMP}/mcp-bearer.hdr" "$B/v0/gql"
+check 401 - "signkey-prod- prefixed bearer POST /v0/gql (raw hex only)" "${GQL[@]}" -H @"${TMP}/prefixed-bearer.hdr" "$B/v0/gql"
 check 200 "8288 /v0/gql auth=absent" "signing-key bearer POST /v0/gql (credential stripped)" "${GQL[@]}" -H @"${TMP}/bearer.hdr" "$B/v0/gql"
 check 200 "8288 /v0/gql auth=absent" "basic  POST /v0/gql (credential stripped)" "${GQL[@]}" -K "${TMP}/basic.curlrc" "$B/v0/gql"
 check 401 - "anonymous  GET  / (dashboard)"                 "$B/"
@@ -142,6 +154,12 @@ check 401 - "anonymous  GET  /v0 (gql playground)"          "$B/v0"
 check 401 - "anonymous  POST /invoke/fn (unauth invoke)"    -X POST "$B/invoke/fn"
 check 401 - "anonymous  GET  /debug/pprof/"                 "$B/debug/pprof/"
 check 401 - "anonymous  GET  /metrics"                      "$B/metrics"
+check 200 "8288 /metrics auth=absent" "signing-key bearer GET /metrics" -H @"${TMP}/bearer.hdr" "$B/metrics"
+check 401 - "anonymous  GET  /invoke/fn"                    "$B/invoke/fn"
+check 401 - "anonymous  GET  /debug/pprof/profile"          "$B/debug/pprof/profile?seconds=1"
+check 401 - "anonymous  GET  /v0/connectx (not a prefix)"   "$B/v0/connectx"
+check 401 - "anonymous  GET  /healthz (only /health)"       "$B/healthz"
+check 401 - "anonymous  GET  /e (no key)"                   "$B/e"
 check 401 - "anonymous  GET  /api/v1/x (SPA fallback)"      "$B/api/v1/x"
 check 401 - "anonymous  POST /mcp"                          -X POST "$B/mcp"
 check 401 - "public sentinel bearer POST /mcp"              -X POST -H @"${TMP}/sentinel-mcp-bearer.hdr" "$B/mcp"
