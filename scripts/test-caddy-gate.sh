@@ -18,6 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
 PY_IMAGE="${PY_IMAGE:-python:3-alpine}"
 PORT="${GATE_TEST_PORT:-18080}"
+UI_PORT="${GATE_TEST_UI_PORT:-18081}"
 NET="caddy-gate-test-$$"
 TMP="$(mktemp -d)"
 umask 077
@@ -59,7 +60,9 @@ class H(http.server.BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         auth = "present" if self.headers.get("Authorization") else "absent"
         up = (self.headers.get("Upgrade") or "none").lower()
-        body = f"{port} {self.path} auth={auth} upgrade={up}".encode()
+        jwt = "present" if self.headers.get("Cf-Access-Jwt-Assertion") else "absent"
+        cookie = "present" if self.headers.get("Cookie") else "absent"
+        body = f"{port} {self.path} auth={auth} upgrade={up} jwt={jwt} cookie={cookie}".encode()
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
         self.wfile.write(body)
     do_GET = do_POST = do_PUT = do_DELETE = _r
@@ -94,7 +97,7 @@ start_caddy() {  # start_caddy <env args...>
     caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >"${TMP}/validate.log" 2>&1 \
     || { cat "${TMP}/validate.log"; echo "caddy validate FAILED"; exit 1; }
   echo "  ok   caddy validate"
-  docker run -d --name "${NET}-caddy" --network "$NET" -p "127.0.0.1:${PORT}:8080" \
+  docker run -d --name "${NET}-caddy" --network "$NET" -p "127.0.0.1:${PORT}:8080" -p "127.0.0.1:${UI_PORT}:8081" \
     -v "${ROOT}/Caddyfile:/etc/caddy/Caddyfile:ro" -e INNGEST_DOMAIN="http://:8080" "$@" \
     "$CADDY_IMAGE" >/dev/null
   for _ in $(seq 1 50); do
@@ -105,6 +108,8 @@ start_caddy() {  # start_caddy <env args...>
 }
 
 B="http://127.0.0.1:${PORT}"
+U="http://127.0.0.1:${UI_PORT}"
+JWT=(-H 'Cf-Access-Jwt-Assertion: test.jwt.value')
 GQL=(-X POST -H 'Content-Type: application/json' --data '{"query":"{ apps { name } }"}')
 
 sdk_matrix() {
@@ -131,6 +136,38 @@ sdk_matrix() {
   check 200 "8288 /dev/traces" "otlp     POST /dev/traces"      -X POST "$B/dev/traces"
   check 200 "8288 /fn/register auth=present" "sdk Authorization reaches upstream" \
     -X POST -H "Authorization: Bearer signkey-test" "$B/fn/register"
+}
+
+# The Access-protected dashboard listener (HOMEINFRA-233): cloudflared -> caddy:8081. Access
+# signs what it lets through; no assertion means the hostname was published unprotected.
+ui_matrix() {
+  check 403 - "ui: no Access JWT GET /"                          "$U/"
+  check 403 - "ui: no Access JWT POST /v0/gql"                   "${GQL[@]}" "$U/v0/gql"
+  check 403 - "ui: basic auth is not a way in (no JWT)"          -K "${TMP}/basic.curlrc" "$U/"
+  check 403 - "ui: signing-key bearer is not a way in (no JWT)"  -H @"${TMP}/bearer.hdr" "$U/"
+  check 200 "8288 / auth=absent" "ui: JWT GET / (dashboard)"     "${JWT[@]}" "$U/"
+  check 200 "8288 / auth=absent upgrade=none jwt=absent cookie=absent" \
+    "ui: Access JWT, CF_Authorization cookie and Authorization never reach inngest" \
+    "${JWT[@]}" -H 'Cookie: CF_Authorization=test.jwt.value' -H @"${TMP}/bearer.hdr" "$U/"
+  check 200 "8288 /runs" "ui: JWT GET /runs (SPA route)"         "${JWT[@]}" "$U/runs"
+  check 200 "8288 /assets/x.js" "ui: JWT GET /assets/x.js"       "${JWT[@]}" "$U/assets/x.js"
+  check 200 "8288 /v0/gql auth=absent" "ui: JWT POST /v0/gql (same origin)" "${GQL[@]}" "${JWT[@]}" "$U/v0/gql"
+  check 200 "8288 /v0/gql auth=absent" "ui: JWT + Authorization POST /v0/gql (stripped)" \
+    "${GQL[@]}" "${JWT[@]}" -H @"${TMP}/bearer.hdr" "$U/v0/gql"
+  check 200 "8288 /v0 " "ui: JWT GET /v0 (playground)"           "${JWT[@]}" "$U/v0"
+  check 200 "8288 /mcp/setup" "ui: JWT GET /mcp/setup (SPA page)" "${JWT[@]}" "$U/mcp/setup"
+  check 200 "8288 /api/v2/operations" "ui: JWT GET /api/v2/operations" "${JWT[@]}" "$U/api/v2/operations"
+  check 200 "8288 /v0/telemetry" "ui: JWT POST /v0/telemetry"   -X POST "${JWT[@]}" "$U/v0/telemetry"
+  check 200 "8288 /dev " "ui: JWT GET /dev"                      "${JWT[@]}" "$U/dev"
+  check 404 - "ui: JWT POST /mcp (MCP server stays on the API host)" -X POST "${JWT[@]}" "$U/mcp"
+  check 404 - "ui: JWT GET /debug/pprof/"                        "${JWT[@]}" "$U/debug/pprof/"
+  check 404 - "ui: JWT GET /metrics"                             "${JWT[@]}" "$U/metrics"
+  check 404 - "ui: JWT POST /e/key (events stay on the API host)" -X POST "${JWT[@]}" "$U/e/somekey"
+  check 404 - "ui: JWT POST /fn/register"                        -X POST "${JWT[@]}" "$U/fn/register"
+  check 404 - "ui: JWT GET /v0/connect (no WebSocket here)"     "${JWT[@]}" "$U/v0/connect"
+  check 404 - "ui: JWT GET /v0/runs/r/batch"                     "${JWT[@]}" "$U/v0/runs/r/batch"
+  check 404 - "ui: JWT GET /v1/events"                           "${JWT[@]}" "$U/v1/events"
+  check 404 - "ui: JWT POST /dev/traces"                         -X POST "${JWT[@]}" "$U/dev/traces"
 }
 
 echo "== credentials SET =="
@@ -167,6 +204,7 @@ check 401 - "signing-key bearer POST /mcp (MCP bearer only)" -X POST -H @"${TMP}
 check 401 - "basic auth POST /mcp (bearer only)"            -X POST -K "${TMP}/basic.curlrc" "$B/mcp"
 check 200 "8288 /mcp auth=present" "MCP bearer POST /mcp"   -X POST -H @"${TMP}/mcp-bearer.hdr" "$B/mcp"
 sdk_matrix
+ui_matrix
 
 echo "== credentials UNSET (must be closed) =="
 start_caddy -e INNGEST_SIGNING_KEY= -e INNGEST_MCP_BEARER= -e INNGEST_DASHBOARD_USER= -e INNGEST_DASHBOARD_HASH=
@@ -179,6 +217,7 @@ check 401 - "sentinel basic user GET /"                     -K "${TMP}/sentinel-
 check 401 - "public sentinel bearer POST /mcp"              -X POST -H @"${TMP}/sentinel-mcp-bearer.hdr" "$B/mcp"
 check 401 - "'Bearer ' (empty) POST /mcp"                   -X POST -H 'Authorization: Bearer ' "$B/mcp"
 sdk_matrix
+ui_matrix
 
 echo "== docker compose passes a single-quoted bcrypt hash through literally =="
 # `compose config` prints a literal $ re-escaped as $$, so undo that before comparing.
@@ -189,6 +228,22 @@ got="$(cd "${TMP}/compose" && docker compose config --format json 2>/dev/null \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["caddy"]["environment"]["INNGEST_DASHBOARD_HASH"].replace("$$", "$"))')"
 if [[ "$got" == "$INNGEST_DASHBOARD_HASH" ]]; then PASS=$((PASS+1)); echo "  ok   compose hash intact"
 else FAIL=$((FAIL+1)); echo "  FAIL compose mangled the hash (\$ interpolation?)"; fi
+
+echo "== compose: the dashboard listener is reachable only through the tunnel (HOMEINFRA-233) =="
+printf 'CLOUDFLARE_TUNNEL_TOKEN=test-token-not-real\n' >"${TMP}/compose/.env"
+cfg="$(cd "${TMP}/compose" && docker compose --profile dashboard-access config --format json 2>/dev/null)"
+plain="$(cd "${TMP}/compose" && docker compose config --format json 2>/dev/null)"
+if python3 -c '
+import json, sys
+c = json.loads(sys.argv[1]); p = json.loads(sys.argv[2])
+caddy_ports = {int(x["target"]) for x in c["services"]["caddy"].get("ports", [])}
+cf = c["services"]["cloudflared"]
+assert caddy_ports == {80, 443}, f"caddy publishes {sorted(caddy_ports)}; 8081 must stay internal"
+assert not cf.get("ports"), "cloudflared must publish nothing"
+assert cf["environment"]["TUNNEL_TOKEN"] == "test-token-not-real", "token not passed through"
+assert "cloudflared" not in p["services"], "cloudflared must be profile-gated"
+' "$cfg" "$plain"; then PASS=$((PASS+1)); echo "  ok   8081 unpublished, cloudflared profile-gated, token passed"
+else FAIL=$((FAIL+1)); echo "  FAIL compose exposure check"; fi
 
 echo "== ${PASS} passed, ${FAIL} failed =="
 [[ "$FAIL" == 0 ]]

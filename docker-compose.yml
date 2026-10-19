@@ -1,5 +1,5 @@
 # Inngest self-hosted stack — single 2GB VPS
-# Total memory limits ≈ 1.75GB (headroom for kernel + Docker on a 2GB box)
+# Total memory limits ≈ 1.85GB with the optional cloudflared (96M); live use is well under it
 #
 # Deploy: ./scripts/up.sh
 
@@ -37,6 +37,32 @@ services:
       resources:
         limits:
           memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Outbound tunnel for the dashboard behind Cloudflare Access (HOMEINFRA-233). Remote-managed:
+  # its one public hostname (inngest-ui.<zone> -> http://caddy:8081, "Protect with Access" on)
+  # lives in the Zero Trust dashboard, and the token is CLOUDFLARE_TUNNEL_TOKEN in .env.
+  # Profile-gated, so `up -d` without the profile (install.sh, remote-bootstrap.sh) neither
+  # starts it with no token nor stops a running one. Start it with:
+  #   docker compose --profile dashboard-access up -d --no-deps cloudflared
+  # Exposes no port: nothing reaches caddy:8081 except through this tunnel.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.6.1
+    profiles: ["dashboard-access"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - caddy
+    deploy:
+      resources:
+        limits:
+          memory: 96M
     logging:
       driver: json-file
       options:
