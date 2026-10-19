@@ -237,6 +237,20 @@ docker run --rm -it caddy:2-alpine caddy hash-password   # prompts; prints a bcr
 sudo docker compose up -d --force-recreate caddy
 ```
 
+**Dashboard behind Cloudflare Access (HOMEINFRA-233).** For a remembered Google sign-in instead of a basic-auth prompt, the dashboard is also served at `inngest-ui.<zone>`, and basic auth on `$INNGEST_DOMAIN` stays as the break-glass path:
+
+```
+browser -> Cloudflare Access (Google, 1-month session) -> tunnel -> cloudflared -> caddy:8081 -> inngest:8288
+workers -> inngest.<zone> (grey cloud, unchanged) -> caddy:443 -> inngest:8288 / 8289
+```
+
+- `$INNGEST_DOMAIN` is **never** orange-clouded. Cloudflare's proxy imposes a ~100s response limit and idles WebSockets, which kills long steps and Connect (HOMEINFRA-219). Only the new hostname goes through Cloudflare, and no worker uses it.
+- `cloudflared` is a remote-managed tunnel (token `CLOUDFLARE_TUNNEL_TOKEN` in `.env`, profile `dashboard-access`). Its one public hostname points at `http://caddy:8081` with **Protect with Access** on, so cloudflared rejects any request without a valid Access JWT for that application. Port 8081 is never published, so there is no origin to reach around Access.
+- Caddy's `:8081` listener serves the dashboard and the same-origin APIs it calls (`/v0/gql`, `/v0`, `/api/v2/operations`, `/v0/telemetry`, `/dev`, `/invoke/*`). The SPA calls `/v0/gql` relative to its own origin (checked in the v1.46.0 bundle), so it works on either hostname. Worker routes, `/mcp`, `/debug/*` and `/metrics` answer 404 there. A request with no `Cf-Access-Jwt-Assertion` gets 403: a tripwire for a hostname published without its Access application, not the boundary.
+- Caddy strips the Access JWT, the `CF_Authorization` cookie and any `Authorization` header before proxying, and deletes them from its log.
+
+Start or restart the tunnel: `sudo docker compose --profile dashboard-access up -d --no-deps cloudflared`. `install.sh` and `remote-bootstrap.sh` run `up -d` without the profile, which neither starts nor stops it. `CLOUDFLARE_TUNNEL_TOKEN` must also be in the deploying checkout's local `.env`, or the env guard refuses the next `install.sh`. Tested by `scripts/test-caddy-gate.sh` (`ui_matrix`, and a compose check that 8081 stays unpublished).
+
 **Machine callers** send `Authorization: Bearer <INNGEST_SIGNING_KEY>` to `/v0/gql`. `scripts/rotate-inngest-keys.sh` reads the key from `.env` and recreates **both** `inngest` and `caddy` on rotation, so the gate always follows the current key. Any caller outside the script's `WORKERS` list must get the new key too.
 
 **Deploy order.** Every `/v0/gql` caller must send the bearer **before** this gate deploys, or it starts getting `401`:

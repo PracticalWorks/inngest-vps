@@ -80,6 +80,44 @@
 	}
 }
 
+# Dashboard behind Cloudflare Access (HOMEINFRA-233). The `cloudflared` service holds an
+# outbound tunnel; its one public hostname (inngest-ui.<zone>, an Access application with
+# "Protect with Access" on, so cloudflared itself verifies the Access JWT) points at
+# http://caddy:8081. Port 8081 is never published, so the only way in is that tunnel.
+# Workers never use this listener: inngest.<zone> above stays grey-cloud, because Cloudflare's
+# ~100s proxy limit and WebSocket idle handling break long steps (HOMEINFRA-219).
+http://:8081 {
+	encode gzip
+
+	log {
+		output stdout
+		format filter {
+			wrap json
+			request>headers>Authorization delete
+			request>headers>Cookie delete
+			request>headers>Cf-Access-Jwt-Assertion delete
+		}
+	}
+
+	# Tripwire, not the boundary: Access signs every request it lets through. A request with
+	# no assertion means the hostname was published without its Access application, so refuse.
+	@no_access_jwt not header Cf-Access-Jwt-Assertion *
+
+	# Dashboard routes only. Worker/SDK routes, the MCP server (exact /mcp; /mcp/setup is an
+	# SPA page), pprof and metrics stay on inngest.<zone> behind their own credentials.
+	@not_dashboard path /mcp /debug /debug/* /metrics /e /e/* /fn/* /v0/connect /v0/connect/* /v0/runs/* /v1/* /dev/traces
+
+	# `route` keeps this order literal (Caddy would otherwise strip the header before the check).
+	route {
+		respond @no_access_jwt "Forbidden: this hostname is served only through Cloudflare Access" 403
+		respond @not_dashboard "Not served on the dashboard hostname" 404
+		request_header -Authorization
+		request_header -Cookie
+		request_header -Cf-Access-Jwt-Assertion
+		reverse_proxy inngest:8288
+	}
+}
+
 # --- Option B: Cloudflare origin cert (uncomment + mount ./certs) ---
 # inngest.example.com {
 # 	tls /certs/origin.pem /certs/origin-key.pem
